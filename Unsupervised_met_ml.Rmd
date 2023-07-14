@@ -1,0 +1,1313 @@
+---
+title: "Unsupervised methods in machine learning"
+author: "Anton Barrera Mora (me@antonio-barrera.cyou)"
+date: "March 2023"
+output:
+  html_document:
+    highlight: default
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 3
+    includes:
+      in_header: p_brand.html
+  word_document: default
+  github_document:
+    preserve_yaml: true
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+editor_options: 
+  markdown: 
+    wrap: sentence
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+## Presentation
+
+In this project we will work with unsupervised machine learning models, with special emphasis on the modification of parameters to refine the results.
+
+## Objetives
+
+The objectives are generation, interpretation, and evaluation of a k-means clustering model and a DBSCAN model.
+In doing so, we will not overlook the phases of data preparation, model quality, and initial knowledge extraction.
+
+# Example 1
+
+## k-means aggregation method with real data
+
+We will use the 'Hawks' dataset, which is part of the 'Stat2Data' package that includes datasets used in the book 'Stat2: Building Models for a World of Data' by @cannon2013
+
+The dataset originated from a research project as referenced earlier @minería2023 where measurements were taken on various characteristics of captured and subsequently released hawks.
+The data source is not clearly specified or documented in the book or on the Oberlin University website @digital .
+The dataset package is used in the aforementioned book to provide an example of nonparametric statistics @cannon2013, p. 86.
+It is widely used in statistics courses.
+
+We have selected this dataset because of its potential for unsupervised data mining algorithms.
+The numerical variables on which we will be based are Wing, Weight, Culmen, Hallux
+
+```{r message= FALSE, warning=FALSE}
+if (!require('Stat2Data')) install.packages('Stat2Data')
+library(Stat2Data)
+data("Hawks")
+summary(Hawks)
+```
+
+The 'summary()' function in the R language provides a basic statistical summary of variables in a dataset.
+For numeric variables, it returns statistics such as minimum, first quartile (Q1), median, mean, third quartile (Q3), and maximum.
+For categorical variables, it returns a frequency table.
+
+We will complete a first analysis using the head() function that will allow us to obtain a snapshot of the first records in the database:
+
+```{r first_rows_analysis, echo=TRUE, message=FALSE, warning=FALSE}
+
+head(Hawks)
+```
+
+From the analysis of the attributes, we obtain the following information about the variables:
+
+-   Age: Age of the hawk - young (I) or adult (A) -.
+
+-   Species: Species of the hawk - Cooper's Hawk (CH), Red-Tailed Hawk (RT), or Sharp-Shinned Hawk (SS) -.
+
+-   Sex: Gender of the hawk - male (M) or female (F) -.
+
+-   Wing: Wing length of the hawk - in millimeters -.
+
+-   Weight: Weight of the hawk - in grams -.
+
+-   Culmen: Culmen length of the hawk's beak - in millimeters -.
+
+-   Hallux: Hallux length of the hawk's claw - in millimeters -.
+
+At this point, there are other variables or columns in the dataset that are irrelevant for the requirements of this work, so we will filter them later.
+
+Additionally, thanks to the information provided by the summary function, we know the following:
+
+1.  The 'BandNumber' variable contains unique records that help identify specific individuals and can be used as a primary key.
+    We observe that there are two blank records without a number, so we will opt to create a new numeric variable.
+
+2.  The 'Wing' variable contains 1 infinite or NA value.
+    Considering that there are noticeable size differences depending on the age and species of the specimens, but this data does not correspond to a continuous variable but a discrete one, we will assign the mean wing size based on the age of the specific specimen and its species.
+
+3.  The 'Weight' variable also has 10 instances with NA values.
+    We will apply the same criterion as the 'Wing' variable.
+    That is, we will assign the mean weight corresponding to its age group to each record.
+
+4.  The 'Culmen' variable contains 7 records with NA values.
+    We will apply the previously described criterion of assigning means according to age.
+
+5.  The 'Hallux' variable also contains 6 NA records to which we will apply the corrective policies described earlier.
+
+We will select the dataset of interest from the current dataset.
+
+```{r library_load, echo=FALSE, message=FALSE, warning=FALSE}
+# Para otras librerias necesarias
+if(!require('ggplot2')) install.packages('ggplot2'); library('ggplot2')
+if(!require('Rmisc')) install.packages('Rmisc'); library('Rmisc')
+if(!require('dplyr')) install.packages('dplyr'); library('dplyr')
+if(!require('xfun')) install.packages('xfun'); library('xfun')
+if(!require('magrittr')) install.packages('magrittr'); library('magrittr')
+if (!require('factoextra')) install.packages('factoextra'); library('factoextra')
+if(!require('pracma')) install.packages('pracma'); library('pracma')
+if (!require('cluster')) install.packages('cluster'); library(cluster)
+if (!require('dendextend')) install.packages('dendextend'); library(dendextend)
+if (!require('knitr')) install.packages('knitr'); library(knitr)
+```
+
+```{r seleccion de columnas, echo=TRUE, message=FALSE, warning=FALSE}
+
+# We select only the variables that we are interested in working with.
+
+hawks_select <- Hawks %>% select(BandNumber, Year, Month, Day, Species, Age, Wing, Weight, Culmen, Hallux)
+```
+
+Point 1.
+We correct the primary key according to the parameters set in the plan:
+
+```{r primary_key_corrections, echo=TRUE, message=FALSE, warning=FALSE}
+
+# creating a new record with numbers from 1 to the total number of rows in the dataset.
+hawks_select$Num_id <- 1:nrow(hawks_select)
+
+# Verifying that all values are unique
+if (length(unique(hawks_select$Num_id)) == nrow(hawks_select)) {
+  cat("The values in the column 'Num_ID' are unique.\n")
+} else {
+  cat("The values in the column 'Num_ID' are NOT unique.\n")
+}
+
+hawks_select <- subset(hawks_select, select = -BandNumber)
+
+```
+
+Point 2.
+We are going to correct the variable Wing that had a record with no value:
+
+```{r Wing_imput, echo=TRUE, message=FALSE, warning=FALSE}
+
+# El atributo tiene un valor NA, vamos a calcular una media condicional:
+
+media_alas_especie_edad <- aggregate(Wing ~ Species + Age, data = hawks_select, FUN = function(x) mean(x, na.rm= TRUE))
+
+# Calculamos las medias de la columna 'Wing' para cada especie y edad, excluyendo los valores NA
+
+# Imputamos el valor faltante en la columna 'Wing' segun la especie y la edad
+# iteramos sobre cada registro usdando un bucle for empezando por 1 hasta el valor del numero de filas
+# usando 'nrow'
+
+for (i in 1:nrow(hawks_select)) {
+  # Si el valor de 'Wing' que estamos buscando es NA, buscamos la media que corresponde a la especie y edad
+  if (is.na(hawks_select$Wing[i])) {
+    # Filtramos el 'data.frame' según la especie y edad
+    media_especie_edad <- media_alas_especie_edad$Wing[media_alas_especie_edad$Species == hawks_select$Species[i] & media_alas_especie_edad$Age == hawks_select$Age[i]]
+    # imputamos la media que corresponda
+    hawks_select$Wing[i] <- media_especie_edad
+  }
+}
+
+# Verificamos que no haya valores NA en la columna
+if (!any(is.na(hawks_select$Wing))) {
+  cat("Todos los valores NA en la columna 'Wing' han sido correctamente imputados")
+} else {
+  cat("Aun quedan valores NA en la columna 'Wing'. \n")
+}
+
+```
+
+Point 3.
+We go on to correct the NA values in the 'Weight' table using the same method as above.
+That is, we impute the mean according to age and species:
+
+```{r Weight_imputs, echo=TRUE, message=FALSE, warning=FALSE}
+
+# El atributo tiene diez registros con NA, vamos a calcular una media condicional:
+
+media_peso_especie_edad <- aggregate(Weight ~ Species + Age, data = hawks_select, FUN = function(x) mean(x, na.rm= TRUE))
+
+# Calculamos las medias de la columna 'Weight' para cada especie y edad, excluyendo los valores NA
+
+# Imputamos el valor faltante en la columna 'Weight' según la especie-edad
+# iteramos sobre cada registro usando un bucle 'for' empezando por 1 hasta el valor del numero de filas
+# empleando 'nrow'
+
+for (i in 1:nrow(hawks_select)) {
+  # Si el valor de 'Weight' que estamos buscando es NA, buscamos la media que corresponde a la especie y edad
+  if (is.na(hawks_select$Weight[i])) {
+    # Filtramos el 'data.frame' según la especie y edad
+    media_especie_edad <- media_peso_especie_edad$Weight[media_peso_especie_edad$Species == hawks_select$Species[i] & media_peso_especie_edad$Age == hawks_select$Age[i]]
+    # imputamos la media que corresponda al registro NA
+    hawks_select$Weight[i] <- media_especie_edad
+  }
+}
+
+# Verificamos que no haya valores NA en la columna
+if (!any(is.na(hawks_select$Weight))) {
+  cat("Todos los valores NA en la columna 'Weight' han sido correctamente imputados")
+} else {
+  cat("Aun quedan valores NA en la columna 'Weight'. \n")
+}
+```
+
+Point 4.
+The variable 'Culmen' contains 7 NA records which we will correct using the same procedure as above, i.e. calculating the mean of the beak dimensions according to age \> and species.
+
+```{r culmen_imputations, echo=TRUE, message=FALSE, warning=FALSE}
+
+# El atributo tiene 7 registros NAs, vamos a calcular una media condicional:
+
+media_pico_especie_edad <- aggregate(Culmen ~ Species + Age, data = hawks_select, FUN = function(x) mean(x, na.rm= TRUE))
+
+# Calculamos las medias de la columna 'Culmen' para cada especie y edad, excluyendo los valores NA
+
+# Imputamos el valor faltante en la columna 'Culmen' según la especie-edad
+# iteramos sobre cada registro usando un bucle 'for' empezando por 1 hasta el valor del numero de filas
+# empleando 'nrow'
+
+for (i in 1:nrow(hawks_select)) {
+  # Si el valor de 'Culmen' que estamos buscando es NA, buscamos la media que corresponde a la especie y edad
+  if (is.na(hawks_select$Culmen[i])) {
+    # Filtramos el 'data.frame' según la especie y edad
+    media_especie_edad <- media_pico_especie_edad$Culmen[media_pico_especie_edad$Species == hawks_select$Species[i] & media_pico_especie_edad$Age == hawks_select$Age[i]]
+    # imputamos la media que corresponda al registro NA
+    hawks_select$Culmen[i] <- media_especie_edad
+  }
+}
+
+# Verificamos que no haya valores NA en la columna
+if (!any(is.na(hawks_select$Culmen))) {
+  cat("Todos los valores NA en la columna 'Culmen' han sido correctamente imputados")
+} else {
+  cat("Aun quedan valores NA en la columna 'Culmen'. \n")
+}
+
+```
+
+Point 5.
+The variable 'Hallux' contains another suitable number of NA records.
+We apply the corrective policies previously implemented:
+
+```{r Hallux_imputations, echo=TRUE, message=FALSE, warning=FALSE}
+
+# El atributo tiene 6 registros NAs, vamos a calcular una media condicional.
+# Calculamos las medias de la columna 'Hallux' para cada especie y edad
+
+media_espolon_especie_edad <- aggregate(Hallux ~ Species + Age, data = hawks_select, FUN = function(x) mean(x, na.rm= TRUE))
+
+
+# Imputamos el valor faltante en la columna 'Hallux' según la especie-edad, iteramos sobre cada registro # usando un bucle 'for' empezando por 1 hasta el valor del numero de filas empleando 'nrow'
+
+for (i in 1:nrow(hawks_select)) {
+  # Si el valor de 'Hallux' que estamos buscando es NA, buscamos la media que corresponde a la especie y edad
+  if (is.na(hawks_select$Hallux[i])) {
+    # Filtramos el 'data.frame' según la especie y edad
+    media_especie_edad <- media_espolon_especie_edad$Hallux[media_espolon_especie_edad$Species == hawks_select$Species[i] & media_espolon_especie_edad$Age == hawks_select$Age[i]]
+    # imputamos la media que corresponda al registro NA
+    hawks_select$Hallux[i] <- media_especie_edad
+  }
+}
+
+# Verificamos que no haya valores NA en la columna
+if (!any(is.na(hawks_select$Hallux))) {
+  cat("Todos los valores NA en la columna 'Hallux' han sido correctamente imputados")
+} else {
+  cat("Aun quedan valores NA en la columna 'Hallux'. \n")
+}
+
+```
+
+Before going on to check the tables and variables created and modified, let's round to one decimal place.
+
+```{r tables_adecuation, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Copia de seguridad
+
+hawks_select_copy <- hawks_select
+
+# Redondeamos a un decimal en la tabla 'hawks_select':
+
+hawks_select$Weight <- round(hawks_select$Weight, 1)
+hawks_select$Wing <- round(hawks_select$Wing, 1)
+hawks_select$Culmen <- round(hawks_select$Culmen, 1)
+hawks_select$Hallux <- round(hawks_select$Hallux, 1)
+
+# Redondeamos a dos decimales en la tabla 'media_alas_especie_X'(alas, espolon, peso, pico)
+media_alas_especie_edad$Wing <- round(media_alas_especie_edad$Wing, 1)
+media_espolon_especie_edad$Hallux <- round(media_espolon_especie_edad$Hallux, 1)
+media_peso_especie_edad$Weight <- round(media_peso_especie_edad$Weight, 1)
+media_pico_especie_edad$Culmen <- round(media_pico_especie_edad$Culmen, 1)
+```
+
+Based on the summary() performed at the beginning, there seem to be outliers in the records, aside from the issues with infinite or 'NA' values.
+At first, we may be tempted to impute these apparent outliers or attribute the variability to age differences.
+Age is the trap in this database.
+It can greatly influence physiological measurements and may be, as we maintain, the main cause of variability.
+
+However, clearly from the results of the summary() function, we can see extreme values in the 'Hallux' variable.
+A minimum of 9.50 and a maximum of 341.40, unless some of the analyzed specimens are prehistoric birds, doesn't seem very normal.
+And as for the 'Wing' variable, we can make the same assertion, although the values are less extreme.
+
+Therefore, we will need to identify outliers beyond the normal range using the interquartile range or IQR.
+It is a statistical dispersion measure that represents the difference between the third quartile (Q3) and the first quartile (Q1).
+Quartiles divide a data distribution into four equal parts.
+
+The first quartile is the value below which 25% of the data lies, the third quartile is the value below which 75% of the data lies, and the IQR represents the range where half of the data lies.
+Outliers are therefore those that are above or below Q1 or Q3 in that distribution.
+
+In our case, we need to expand the margins, meaning extend the range beyond Q1 and Q3, so multiply by +- 1.5.
+The lower limit will be negative, so unless it's a typographical error, we doubt that the claw or spur has a negative length.
+However, we don't know what the minimum is because we are talking about birds in a developmental period.
+
+This allow us to observe the lower and upper limits of each variable of interest or those we suspected to have issues.
+Also include the other variables to ensure that there are no problems.
+In theory, there should be no infinite values, so the use of the na.rm() function to remove them will not be necessary.
+Subsequently, proceding to represent them in box plots.
+
+```{r outliers_indetification,echo=TRUE, message=FALSE, warning=FALSE}
+
+print("Aplicando IQR")
+
+## Aplicando IQR ##
+###################
+
+# Aplicamos IQR #
+#################
+wing_iqr <- IQR(hawks_select$Wing)
+hallux_iqr <- IQR(hawks_select$Hallux)
+weight_iqr <- IQR(hawks_select$Weight)
+culmen_iqr <- IQR(hawks_select$Culmen)
+
+# Establecemos los limites #
+############################
+# Nota: El limite inferior queda en negativo, asi que salvo error tipográfico, dudamos que la garra o espolon sea negativa. Ahora bien no sabemos cual es el minimo porque estamos hablando de aves en desarrollo. 
+
+# Variable 'wing'
+wing_limite_bajo <- quantile(hawks_select$Wing, 0.25) -1.5 * wing_iqr
+wing_limite_alto <- quantile(hawks_select$Wing, 0.75) + 1.5 * wing_iqr 
+# Variable 'Hallux'
+hallux_limite_bajo <- quantile(hawks_select$Hallux, 0.25) -1.5 * hallux_iqr
+hallux_limite_alto <- quantile(hawks_select$Hallux, 0.75) +1.5 * hallux_iqr 
+# Variable 'Weight'
+weight_limite_bajo <- quantile(hawks_select$Weight, 0.25) -1.5 * weight_iqr
+weight_limite_alto <- quantile(hawks_select$Weight, 0.75) +1.5 * weight_iqr
+# Variable 'Culmen'
+culmen_limite_bajo <- quantile(hawks_select$Culmen, 0.25) -1.5 * culmen_iqr
+culmen_limite_alto <- quantile(hawks_select$Culmen, 0.75) +1.5 * culmen_iqr
+
+
+# identificamos los valores atipicos en cada una de las variables:
+wing_outliers <- hawks_select$Wing[hawks_select$Wing < wing_limite_bajo | hawks_select$Wing > wing_limite_alto]
+
+hallux_outliers <- hawks_select$Hallux[hawks_select$Hallux < hallux_limite_bajo | hawks_select$Hallux > hallux_limite_alto]
+
+weight_outliers <- hawks_select$Weight[hawks_select$Weight < weight_limite_bajo | hawks_select$Weight > weight_limite_alto]
+
+culmen_outliers <- hawks_select$Culmen[hawks_select$Culmen < culmen_limite_bajo | hawks_select$Culmen > culmen_limite_alto]
+
+## Visualizamos los valores fuera de rango, de haberlos:
+########################################################
+
+print("Visualizamos los valores fuera de rango")
+
+# Convertimos los vectores en 'data.frames'#
+hallux_outliers_df <- data.frame(hallux_outliers)
+weight_outliers_df <- data.frame(weight_outliers)
+wing_outliers_df <- data.frame(wing_outliers)
+culmen_outliers_df <- data.frame(culmen_outliers)
+
+# Imprimimos tablas en el documento
+kable(hallux_outliers_df, caption = "Outliers en 'Hallux'")
+kable(weight_outliers_df, caption = "Outliers en 'Weight'")
+kable(wing_outliers_df, caption = "Outliers en 'Wing'")
+kable(culmen_outliers_df, caption = "Outliers en 'Culmen'")
+
+```
+
+We proceed to the graphical representation, but considering that the only outliers are in the variable 'hallux':
+
+```{r outliers_representation, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Representación de la variable 'Hallux'
+boxplot(hawks_select$Hallux, main = "Hallux", ylab = "Tamaño del espolón (mm)", outline = TRUE)
+```
+
+The graphical representation shows us that, indeed, we have 7 values outside the dispersion ranges.
+At this point, we must decide what to do with these values and we choose to impute the species- and age-dependent mean to them:
+
+```{r hallux_outliers_means, echo=TRUE, message=FALSE, warning=FALSE}
+
+print("imputamos las medias en 'Hallux' a outliers segun especie y edad")
+
+for (i in 1:nrow(hawks_select)) {
+  # Si el valor de 'Hallux' que estamos buscando es superior a 55.9, buscamos la media que    corresponde a la especie y edad. No es necesario buscar en el rango inferior porque sabemos que todos los valores son superiores a 55.9
+  if (hawks_select$Hallux[i] > hallux_limite_alto) {
+    # Filtramos el 'data.frame' según la especie y edad
+    media_especie_edad <- media_espolon_especie_edad$Hallux[media_espolon_especie_edad$Species == hawks_select$Species[i] & media_espolon_especie_edad$Age == hawks_select$Age[i]]
+    # imputamos la media que corresponda al registro NA
+    hawks_select$Hallux[i] <- media_especie_edad
+  }
+}
+
+# Verificamos que no haya valores NA en la columna
+if (!any(hawks_select$Hallux[i] > hallux_limite_alto)) {
+  cat("Todos los valores Outliers en la columna 'Hallux' han sido correctamente imputados")
+} else {
+  cat("Aun quedan valores Outliers en la columna 'Hallux'. \n")
+}
+
+```
+
+The operation appears to have been successful, we repeat with the box chart:
+
+```{r Hallux_revised, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Representación de la variable 'Hallux' en busca de confirmar que no quedan outliers:
+
+boxplot(hawks_select$Hallux, main = "Hallux", ylab = "Tamaño del espolón (mm)", outline = TRUE)
+
+```
+
+Indeed, no out-of-range values left in the variable.
+
+### Table Integrity revision
+
+```{r summary hawks_select, echo=TRUE, message=FALSE, warning=FALSE}
+
+summary(hawks_select)
+```
+
+No infinite values, and the means, although quite disparate as in the case of 'wing' - considering that it does not discriminate developing birds - do not contain extreme values.
+
+Continue examining the table, now analyzing the variables using the name() function.
+
+```{r names_head hawks_select, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Analizamos con `name()` las variables:
+names(hawks_select)
+
+# Analizamos con `head()`
+
+head(hawks_select, 3)
+
+```
+
+Next we will analyse the structure with the str() function which gives us a more complete overview of the table structure:
+
+```{r  str_hawks_select, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Realizamos un resumen estadistico de todas la variables:
+
+str(hawks_select)
+```
+
+We observe that we have 908 records in 10 variables.
+At this point, we do not consider changing the measurement scale to kilograms for the 'Weight' variable, which seems more appropriate, especially for the juvenile bird population.
+We also do not consider any changes necessary in the types of variables present in the table.
+
+Regarding the "additional tables" that contain the means of different physiological measurements for different species based on their age, we do not believe it is necessary to analyze them using any R function, as they are highly summarized tables with 6 records and 3 variables.
+
+### Inventory
+
+At this point, our dataset consists of:
+
+Table 'hawks_select' with all the relevant variables for the analysis and with the cleaning process applied.
+
+Additional tables with means of wing length, hallux size, weight, and culmen length in relation to species and age.
+These tables contain 6 records and 3 variables each.
+
+### Distribution of variables in the 'hawks_select' table.
+
+-   Histograms.
+
+```{r tema custom, echo=FALSE, message=FALSE, warning=FALSE}
+
+mi_tema <- function() {
+  theme(
+    panel.border = element_rect(colour = "black", 
+                                fill = NA, 
+                                linetype = 1),
+    panel.background = element_rect(fill = "white", 
+                                    color = 'grey50'),
+    panel.grid.major = element_line(colour = "grey80", linetype = "dashed"),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(colour = "black", 
+                             face = "plain", 
+                             family = "serif", 
+                             size = 12),
+    axis.title = element_text(colour = "black", 
+                              family = "serif", 
+                              face = "bold",
+                              size = 14),
+    axis.ticks = element_line(colour = "black"),
+    axis.ticks.length = unit(0.15, "cm"),
+    plot.title = element_text(size = 23, 
+                              hjust = 0.5, 
+                              family = "serif",
+                              face = "bold",
+                              margin = margin(0, 0, 10, 0)),
+    plot.subtitle=element_text(size=16, 
+                               hjust = 0.5,
+                               margin = margin(0, 0, 10, 0)),
+    plot.caption = element_text(colour = "black", 
+                             face = "italic", 
+                             family = "serif",
+                             size = 10,
+                             margin = margin(10, 0, 0, 0)),
+    legend.background = element_rect(fill = "white"),
+    legend.key = element_rect(fill = "white"),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 12),
+    legend.position = "right"
+  )
+}
+```
+
+```{r hawks_select_distribution, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Histogramas para variables numéricas ##
+#########################################
+
+# Histograma para 'Wing'
+print("Distribucion del tamaño de las alas")
+ggplot(hawks_select, aes(x= Wing)) +
+  geom_histogram(binwidth = 10, color = "black", fill= "blue", alpha= 0.7) +
+  mi_tema() +
+  labs(title = "Distribucion 'Wing'", x = "Wing", y = "Frecuencia")
+
+# Histograma paea 'Weight'
+print("Distribucion del tamaño del peso")
+ggplot(hawks_select, aes(x = Weight)) +
+  geom_histogram(binwidth = 50, color= "black", fill= "red", alpha = 0.7) +
+  mi_tema() +
+  labs(title = "Distribucion 'Weight'", x = "Weight", y = "Frecuencia")
+
+# Histograma para 'Culmen'
+print("Distribucion del tamaño del pico")
+ggplot(hawks_select, aes(x = Culmen)) + 
+  geom_histogram(binwidth = 1, color = "black", fill = "green", alpha = 0.7) +
+  mi_tema() +
+  labs(title = "Distribucion 'Culmen'", x = "Culmen", y = "Frecuencia")
+
+# Histograma para 'Hallux'
+print("Distribucion del tamaño de los espolones")
+ggplot(hawks_select, aes(x = Hallux)) +
+  mi_tema() +
+  # scale_y_log10() + # aplicamos escala logaritmica para poder representar los datos de frecuencia (y)
+  # scale_x_log10() +  # aplicamos escala logaritmica para poder representar las medidas adecuadamente (x)
+  geom_histogram(binwidth = 1, color = "black", fill = "purple", alpha = 0.7) +
+  labs(title = "Distribucion 'Hallux'", x = "Hallux", y = "Frecuencia") 
+  # labs(caption = "Escalas logatimica en base 10 en los ejes X-Y")
+
+```
+
+-   Bar charts for categorical variables in 'hawks_select'.
+
+```{r Hawks_select_distr_II, echo=TRUE, message=FALSE, warning=FALSE}
+
+## Grafico de barras para 'species' ###
+#######################################
+
+ggplot(hawks_select, aes(x= Species)) +
+  mi_tema() +
+  geom_bar(color= "black", fill = "blue", alpha = 0.7) +
+  labs(title = "Distribucion 'Species'", x = "Species", y = "Frecuencia") +
+  labs(caption = "Cooper's Hawk (CH), Red-Tailed Hawk (RT) o Sharp-Shinned Hawk (SS)")
+
+## Grafico de barras para 'Age' ####
+####################################
+
+ggplot(hawks_select, aes(x = Age)) +
+  geom_bar(color= "black", fill = "gray", alpha = 0.7) +
+  mi_tema() +
+  labs(title = "Distribucion 'Age'", x= "Age", y= "Frecuencia") +
+  labs(caption = "A= Adulto   I= Infantes")
+
+```
+
+On the one hand, we observed an over-representation of the RT species and an under-representation of CH.
+On the other hand, the child population of the sample is higher than the adult population.
+
+-   Other visualisations of the variable distributions:
+
+```{r distribucion en Hawks_select III, echo=TRUE, message=FALSE, warning=FALSE}
+
+## Distribucion de las variables numéricas ##
+#############################################
+print("Distribuciones de variables en la tabla 'hawks_select' \n")
+
+# Establecemos las opciones gráficas con `par()` y con `mfrow()`configuramos la matriz de representacion
+par(mfrow = c(2,2))
+
+hist(hawks_select$Wing, main= "Wing", xlab = "Longitud del ala (milimetros)")
+hist(hawks_select$Weight, main = "Weight", xlab = "Peso (gramos)")
+hist(hawks_select$Culmen, main = "Culmen", xlab = "Longitud del pico (milimetros)")
+hist(hawks_select$Hallux, main = "Hallux", xlab = "Longitud de los espolones (milimetros)")
+
+## Distribucion de las variables categóricas ##
+###############################################
+
+# Restablecemos las opciones gráficas con `par()` y con `mfrow()`configuramos la matriz de representación para el tipo de grafico "Barplot"
+par(mfrow = c(1,2))
+
+
+barplot(table(hawks_select$Age), main = "Age", xlab = "Edad", ylab = "Frecuencia")
+barplot(table(hawks_select$Species), main = "Species", xlab = "Especie", ylab = "Frecuencia")
+
+```
+
+### Distribution of variables in annexed tables - averages according to age and species
+
+```{r distribucion de medias, echo=TRUE, message=FALSE, warning=FALSE}
+
+## Grafica de barras agrupadas para 'media_alas_especie_edad' ##
+#################################################################
+
+ggplot(media_alas_especie_edad, aes(x = Species, y = Wing, fill= Age)) +
+  mi_tema() +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Medias de alas por especie y edad", x = "Especies", y = "Media 'Wing'") +
+  labs(caption = "Cooper's Hawk (CH), Red-Tailed Hawk (RT) o Sharp-Shinned Hawk (SS)")
+
+## Grafica de barras agrupadas para 'media_espolon_especie_edad' ##
+###################################################################
+
+ggplot(media_espolon_especie_edad, aes(x = Species, y= Hallux, fill = Age)) +
+  mi_tema() +
+  geom_bar(stat= "identity", position = "dodge") +
+  labs(title = "Medias de espolones por especie y edad", x = "Especies", y= "Media 'Hallux' ") +
+  labs(caption = "Cooper's Hawk (CH), Red-Tailed Hawk (RT) o Sharp-Shinned Hawk (SS)")
+
+## Grafica de barras agrupadas para 'media_peso_especie_edad' ##
+###################################################################
+
+ggplot(media_peso_especie_edad, aes(x = Species, y= Weight, fill = Age)) +
+  mi_tema() +
+  geom_bar(stat= "identity", position = "dodge") +
+  labs(title = "Medias de peso por especie y edad", x = "Especies", y= "Media 'Weight' ") +
+  labs(caption = "Cooper's Hawk (CH), Red-Tailed Hawk (RT) o Sharp-Shinned Hawk (SS)")
+
+## Grafica de barras agrupadas para 'media_pico_especie_edad' ##
+###################################################################
+
+ggplot(media_pico_especie_edad, aes(x = Species, y= Culmen, fill = Age)) +
+  mi_tema() +
+  geom_bar(stat= "identity", position = "dodge") +
+  labs(title = "Medias de pico por especie y edad", x = "Especies", y= "Media 'Culmen' ") +
+  labs(caption = "Cooper's Hawk (CH), Red-Tailed Hawk (RT) o Sharp-Shinned Hawk (SS)")
+
+```
+
+### Study using k-means aggregation method
+
+Using the 'hawks_select' table, where we have selected the relevant variables for our study, we will employ the k-means clustering method.
+This method will group observations into 'k' clusters based on the nearest mean.
+It is an unsupervised clustering method used when there are no pre-defined labels for the data [@james2013; @gareth2013; @cannon2013a].
+
+By "no pre-defined labels," we mean that the data does not have a predetermined category or class assigned to it.
+In other words, we do not know which group each data point belongs to, as there are no right or wrong answers in the variable(s) @gironésroig2017 .
+
+The most common uses of this technique are in segmentation - e.g., customers, to understand their needs -, dimensionality reduction - or to group into smaller clusters -, data understanding - to improve data representation -, defect or problem detection - e.g., outliers or when there are values far from the mean and logic -, and classification - after applying the algorithm, labels can be assigned.
+
+The main objectives, but not exclusive, for applying this algorithm in this case would be:
+
+1.  Segmentation: Although we already know the labels - CH, RT, SS -, we can explore if these species have notable differences in their characteristics and if coherent data groups are formed.
+    It will also allow us to gain a better understanding of the data and identify potential subgroups.
+
+2.  Analysis of physical characteristics and age: Clustering will reveal differences between adults and immature individuals.
+
+3.  Problem detection: By applying the summary() function earlier, we suspected the presence of possible outliers or extreme values.
+    With this algorithm, we can confirm or dismiss this hypothesis.
+
+#### Application of the k-means method to the numerical variables in the 'hawks_select' dataset
+
+When applying the algorithm, we will use the normalized variables 'Wing', 'Weight', 'Culmen', and 'Hallux'.
+This ensures that all features have equal weighting in the formation of clusters or groups [\@montoliucolásraúl].
+We will carry this out using the scale() function in R, which performs normalization by default and follows the formula: z = (x-m)/d
+
+Here, x is the original value, m is the mean of the variable, d is the standard deviation, and z is the standardized or z-score value [\@scalefu].
+We aim to find 3 clusters, one for each hawk species, but it is also possible to have 6 clusters considering the age groups.
+Therefore, we will apply the k-means algorithm twice, with 3 and 6 clusters respectively.
+
+```{r k-means_application,echo=TRUE, message=FALSE, warning=FALSE }
+
+print("Aplicando k-means")
+
+# Preprocesamiento de los datos: z-score #
+##########################################
+
+hawks_z <- scale(hawks_select[, c("Wing", "Weight", "Culmen", "Hallux")])
+
+# Aplicamos k-means con 3 agrupaciones:
+
+  # La semilla se fija para reproducibilidad. el valor inicializa el RNG. Si se mantiene constante, aunque el k-means use numeros aleatorios, se garantiza que se puede reproducir
+
+# Aplicamos los k-means:
+
+print("para tres grupos")
+set.seed(131) 
+
+tres_grupos <- 3
+kmeans3_result <- kmeans(hawks_z, centers = tres_grupos)
+
+print("para seis grupos")
+set.seed(131) 
+seis_grupos <- 6
+kmeans6_result <- kmeans(hawks_z, centers = seis_grupos)
+
+# Agregamos la información de los clusteres a los datos de la tabla original:
+
+hawks_select$Cluster3 <- as.factor(kmeans3_result$cluster)
+hawks_select$Cluster6 <- as.factor(kmeans6_result$cluster)
+
+```
+
+At this point, it is necessary to clarify that by using set.seed(), we are ensuring randomness.
+Seeds are numbers used to initialize the random number generator (RNG).
+Regardless of the chosen number, it guarantees that any procedure involving random numbers is replicable.
+This is particularly important in algorithms like k-means, which are sensitive to random initialization and can produce different results in each execution [@macqueen1967; @kaufman2009a]
+
+Next, we will visualize each combination of variables and the corresponding results for analysis:
+
+-   Graphs for 3 groups:
+
+```{r k-means3_graphs, echo=TRUE, message=FALSE, warning=FALSE}
+
+print("Graficando k-means para tres grupos")
+# Tres grupos #
+###############
+
+# Wing vs Weight
+print("Tres grupos: Wing vs Weight")
+ggplot(hawks_select, aes(x = Wing, y = Weight, color = Cluster3)) +
+  geom_point() +
+  labs(title = "Clustering k-means (3 grupos)", x = "Tamaño del ala (mm)", y = "Peso (g)") +
+  theme_minimal()
+
+# Wing vs Culmen
+print("Tres grupos: Wing vs Culmen")
+ggplot(hawks_select, aes(x = Wing, y = Culmen, color = Cluster3)) +
+  geom_point() +
+  labs(title = "Clustering k-means (3 grupos)", x = "Tamaño del ala (mm)", y = "Tamaño del pico (mm)") +
+  theme_minimal()
+
+# Wing vs Hallux
+print("Tres grupos: Wing vs Hallux")
+ggplot(hawks_select, aes(x = Wing, y = Hallux, color = Cluster3)) +
+  geom_point() +
+  labs(title = "Clustering k-means (3 grupos)", x = "Tamaño del ala (mm)", y = "Tamanyo del espolon (mm)") +
+  theme_minimal()
+
+# Weight vs Culmen
+print("Tres grupos: Weight vs Culmen")
+ggplot(hawks_select, aes(x = Weight, y = Culmen, color = Cluster3)) +
+  geom_point() +
+  labs(title = "Clustering k-means (3 grupos)", x = "Peso (g)", y = "Tamaño del pico (mm)") +
+  theme_minimal()
+
+# Weight vs Hallux
+print("Tres grupos: Weight vs Hallux")
+ggplot(hawks_select, aes(x = Weight, y = Hallux, color = Cluster3)) +
+  geom_point() +
+  labs(title = "Clustering k-means (3 grupos)", x = "Peso (g)", y = "Tamaño de la garra (mm)") +
+  theme_minimal()
+
+# Culmen vs Hallux
+print("Tres grupos: Culmen vs Hallux")
+ggplot(hawks_select, aes(x = Culmen, y = Hallux, color = Cluster3)) +
+  geom_point() +
+  labs(title = "Clustering k-means (3 grupos)", x = "Tamaño del pico (mm)", y = "Tamaño de la garra (mm)") +
+  theme_minimal()
+
+# Visualizamos los clusters #
+#############################
+
+# cluster 3 #
+#############
+
+clusplot(hawks_z, kmeans3_result$cluster, color=TRUE, shade=TRUE, labels=2, lines=0)
+title("\n \n Clustering k-means (3 grupos)")
+```
+
+The measurements of 'wing' and 'Culmen', that is, beak and wings, appear to tend to separate the three bird species.
+Weight also does not seem to be the most consistent grouping measure, as there is a lot of overlap.
+In general, it tends to mix observations.
+We assume that the problem is the mixing of juvenile and adult populations.
+
+Charts for 6 groups:
+
+```{r graficando k-means6, echo=TRUE, message=FALSE, warning=FALSE}
+
+print("Graficando k-means para seis grupos")
+
+# Seis grupos#
+##############
+
+# Wing vs Weight
+print("Seis grupos: Wing vs Weight")
+ggplot(hawks_select, aes(x = Wing, y = Weight, color = Cluster6)) +
+  geom_point() +
+  labs(title = "Clustering k-means (6 grupos)", x = "Tamaño del ala (mm)", y = "Peso (g)") +
+  theme_minimal()
+
+# Wing vs Culmen
+print("Seis grupos: Wing vs Culmen")
+ggplot(hawks_select, aes(x = Wing, y = Culmen, color = Cluster6)) +
+  geom_point() +
+  labs(title = "Clustering k-means (6 grupos)", x = "Tamaño del ala (mm)", y = "Tamaño del pico (mm)") +
+  theme_minimal()
+
+# Wing vs Hallux
+print("Seis grupos: Wing vs Hallux")
+ggplot(hawks_select, aes(x = Wing, y = Hallux, color = Cluster6)) +
+  geom_point() +
+  labs(title = "Clustering k-means (6 grupos)", x = "Tamaño del ala (mm)", y = "Tamaño de ls espolones (mm)") +
+  theme_minimal()
+
+# Weight vs Culmen
+print("Seis grupos: Weight vs Culmen")
+ggplot(hawks_select, aes(x = Weight, y = Culmen, color = Cluster6)) +
+  geom_point() +
+  labs(title = "Clustering k-means (6 grupos)", x = "Peso (g)", y = "Tamaño del pico (mm)") +
+  theme_minimal()
+
+# Weight vs Hallux
+print("Seis grupos: Weight vs Hallux")
+ggplot(hawks_select, aes(x = Weight, y = Hallux, color = Cluster6)) +
+  geom_point() +
+  labs(title = "Clustering k-means (6 grupos)", x = "Peso (g)", y = "Tamaño de la garra (mm)") +
+  theme_minimal()
+
+# Culmen vs Hallux
+print("Seis grupos: Culmen vs Hallux")
+ggplot(hawks_select, aes(x = Culmen, y = Hallux, color = Cluster6)) +
+  geom_point() +
+  labs(title = "Clustering k-means (6 grupos)", x = "Tamaño del pico (mm)", y = "Tamaño de la garra (mm)") +
+  theme_minimal()
+
+
+# Visualizamos los clusters #
+#############################
+
+
+# cluster 6 #
+############
+
+clusplot(hawks_z, kmeans6_result$cluster, color=TRUE, shade=TRUE, labels=2, lines=0) 
+title("\n \n Clustering k-means (6 grupos)")
+```
+
+We observe that forcing the creation of 6 groups does not result in convincing outcomes.
+In general, everything suggests that there are 3 groups, although not very homogeneous, which tend to mix and confuse the algorithm when trying to group them.
+
+#### Analysis of the results
+
+At this point, as we have observed throughout, the graphs of the different variables suggest the existence of 3 groups, although not very homogeneous.
+Ideally, we would have been able to make the clusters comparable across different age groups and species by including age as an analytical variable.
+However, the k-means algorithm is designed to work with continuous variables, and both species and age are categorical.
+
+One possible solution that was not addressed at the beginning of this exercise would have been to create indicator variables (dummy variables) with values of 1 and 0.
+However, this approach would have also brought problems, as k-means assigns equal importance to all variables, and the indicator variables would have played an inappropriate role in the analysis.
+Additionally, the analysis seemed much more complex with dummy variables.
+
+Since we still do not have a clear idea of how many groups we can label the data with, we will try to perform hierarchical clustering.
+Given the nature of the dataset, we made the mistake of assuming that we could guess the number of clusters based on the nature of the data.
+Therefore, we will attempt to use hierarchical clustering based on the Euclidean method.
+
+```{r clustering jerarquico, echo=TRUE, message=FALSE, warning=FALSE}
+
+print("clustering jerarquico")
+
+# Calculamos la matriz de distancias
+distancias <- dist(hawks_z, method = "euclidean")
+
+# Realizamos el clustering jerárquico
+clustering_jerarquico <- hclust(distancias, method = "complete")
+
+# Cortamos el árbol para obtener 3 clusters
+clusters_jerarquico3 <- cutree(clustering_jerarquico, k = 3)
+
+# Añadimos la información de los clusters al data frame original
+hawks_select$ClusterH3 <- as.factor(clusters_jerarquico3)
+
+# Visualizamos el dendrograma
+dend <- as.dendrogram(clustering_jerarquico)
+# Coloreamos las ramas del dendrograma según los grupos
+colors <- rainbow(3)[clusters_jerarquico3]
+labels_colors(dend) <- colors[order.dendrogram(dend)]
+plot(dend)
+colored_bars(colors[order.dendrogram(dend)], dend, rowLabels = FALSE)
+
+# Graficamos un ejemplo de dispersión para los clusters jerárquicos
+ggplot(hawks_select, aes(x = Wing, y = Weight, color = ClusterH3)) +
+  geom_point() +
+  labs(title = "Clustering jerárquico (3 grupos)", x = "Longitud del ala (mm)", y = "Peso (g)") +
+  theme_minimal()
+# visualizamos la tabla con la agrupacion de los resultados:
+table(clusters_jerarquico3)
+
+```
+
+We observe that it has created two groups.
+In general, we can conclude that the dataset was not particularly well-suited for the k-means method due to the aforementioned aspects.
+With limitations, we can affirm that the data, when applying the algorithm, seems to fall into 3 heterogeneous groups, which would not allow us to confidently assign an observation to a specific group or label these observations.
+
+# Example 2
+
+## Analysis applying DBSCAN and OPTICS methods.
+
+Based on the same dataset that has been created, including the normalized scores, we will proceed to perform an analysis using DBSCAN and OPTICS.
+
+We will use the 'DBSCAN' library, which focuses on efficiently implementing DBSCAN and OPTICS.
+Additionally, we will complement it with the use of the 'fpc' library, which includes a 'cluster.stats' function that can evaluate the results of an OPTICS clustering.
+
+```{r library_II, echo=FALSE, message=FALSE, warning=FALSE}
+
+if (!require('fpc')) install.packages('fpc'); library(fpc)
+if (!require('dbscan')) install.packages('dbscan'); library(dbscan)
+```
+
+OPTICS (Ordering Points to Identify the Clustering Structure), introduced by Ankerst et al. in 1999, is an extension of the DBSCAN algorithm that can help us better handle the problem of variable density among clusters, which was evident when applying k-means.
+OPTICS does not directly assign clusters but orders the points to highlight their density, facilitating visualization with a reachability plot that shows the distance between each point.
+While theoretically, we do not have outliers in the dataset, if present, OPTICS does not exclude outliers but identifies them by assigning them a higher reachability value.
+
+Let's proceed with OPTICS:
+
+```{r OPTICS, echo=TRUE, message=FALSE, warning=FALSE}
+
+print("aplicamos optics al dataset que ya tenemos")
+
+# Configuramos eps= x o la distancia máxima entre dos puntos:
+# El grupo debe tener como mínimo 'minPts'= x observaciones para ser agrupado
+
+optics_result <- dbscan::optics(hawks_z, minPts = 10)
+optics_result
+
+# Obtenemos el orden de las observaciones o puntos
+print("Obtenemos la odenacion de los puntos")
+optics_result$order
+```
+
+Creating a reachability diagram:
+
+```{r diagrama de alcanzabilidad, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Diagrama o gráfica de alcance
+
+plot(optics_result, main= "Diagrama de alcanzabilidad de OPTICS")
+
+```
+
+We have identified one large cluster, two small clusters, and two medium-sized clusters.
+This conclusion was reached after experimenting with different parameter values for eps (maximum distance between two points) and minPts (minimum number of points in a neighborhood) in the clustering of observations.
+There is a reachability order of approximately 600 points that marks the valley of a large cluster.
+Valleys represent high reachability distances, indicating clusters, while peaks represent the separation between clusters.
+We observe that the clusters are not uniform, and the reachability plot reveals a total of 5 clusters.
+To further analyze the clusters, we can create a reachability plot that shows the distances between nearby points within the same cluster and between different clusters.
+
+```{r trazas alas-peso OPTICS, echo=TRUE, message=FALSE, warning=FALSE}
+## Dibujo de trazas variables alas-peso
+
+# Selección de columnas
+
+a <- hawks_select$Wing
+b <- hawks_select$Weight
+c <- hawks_select$Culmen
+d <- hawks_select$Hallux
+
+# Creación de la grafica
+plot(a, b,  col="grey")
+
+# agregamos trazos al par 'Alas-Peso'
+title("Trazas Alas-peso")
+polygon(a[optics_result$order],  b[optics_result$order])
+
+
+```
+
+And now the graph for the traces:
+
+```{r trazas pico-espolon OPTICS, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Dibujo de trazas pico-espolon
+
+c <- hawks_select$Culmen
+d <- hawks_select$Hallux
+
+# Creación de la grafica
+plot(c, d,  col="blue")
+
+# agregamos trazos al par 'Alas-Peso'
+title("Trazas pico-espolón")
+polygon(c[optics_result$order],  d[optics_result$order])
+```
+
+At this point, the graphs show a large number of points and it is still difficult to understand.
+We decided to apply the knowledge learned in the previous PEC and use Principal Component Analysis (PCA) to reduce the dimensionality and gain better insights into the variables [\@minería2023b].
+We will use the devtools package and the ggbiplot library.
+
+Devtools is an R package designed to facilitate development.
+It provides useful functions for development tasks, especially related to package installation from the repository and version control on GitHub.
+It also includes features for building, loading packages, and running tests [@toolsto; @function; @devtools2023].
+
+On the other hand, ggbiplot is an R package that provides a ggplot2-based implementation of biplot graphs for prcomp().
+It is particularly useful for visualizing high-dimensional data.
+In a biplot, both observations and variables are represented in the same two-dimensional space.
+However, it should be noted that ggbiplot is no longer actively maintained [@vu2023; @myaseen2082014].
+
+Based on the above, it is important to note that ggbiplot is not available in the official CRAN repository and needs to be installed from GitHub using an intermediary tool like devtools.
+
+We proceed with PCA and the plot using ggbiplot.
+
+```{r PCA, echo=TRUE, message=FALSE, warning=FALSE}
+
+# vamos a necesitar el paquete  'devtools':
+if (!require('devtools')) install.packages('devtools'); library(devtools)
+
+# usamos la función 'install_github' para la instalación de 'ggbiplot':
+install_github("vqv/ggbiplot"); library(ggbiplot)
+
+
+pca_result <- prcomp(hawks_select[,c("Wing", "Weight", "Culmen", "Hallux")], scale = TRUE)
+pca_graph <- ggbiplot(pca_result, obs.scale = 1, var.scale = 1, 
+              groups = hawks_select$Species, ellipse = TRUE, 
+              circle = TRUE)
+print(pca_graph)
+
+
+# Obtener los resultados del PCA
+pca_variances <- pca_result$sdev^2
+pca_proportions <- pca_variances / sum(pca_variances)
+pca_loadings <- pca_result$rotation
+
+# Imprimir los resultados
+cat("Varianzas explicadas por cada componente principal:\n")
+cat(pca_variances, "\n")
+cat("\nProporciones de varianzas explicadas por cada componente principal:\n")
+cat(pca_proportions, "\n")
+cat("\nLoadings de cada variable en cada componente principal:\n")
+print(pca_loadings)
+
+```
+
+Principal Component Analysis (PCA) is a dimensionality reduction technique that allows us to visualize and understand the structure of a multidimensional dataset.
+In this case, we applied PCA to a dataset of hawks with four variables of interest: wing size, culmen size, hallux size, and weight.
+
+In this analysis, PC1 explains approximately 95% of the total variance in the data.
+It appears that PC1 is strongly influenced by all the variables, as the loading coefficients of the variables in PC1 are relatively similar in magnitude.
+This suggests that the four variables are correlated, as they increase or decrease together.
+Hypothetically, this could be interpreted as larger hawks tending to have longer wings, higher weight, larger culmen size, and bigger hallux, which seems logical.
+
+The remaining principal components (PC2, PC3, and PC4) explain only a small fraction of the total variance (around 4.55%).
+However, they can still be useful for identifying subtle patterns in the data.
+For example, the loading coefficient of the Hallux variable in PC2 is negative and of large magnitude, indicating that hallux length varies in the opposite direction to the other variables in this dimension.
+This could suggest the existence of different adaptation strategies among hawk species.
+
+Although this is a hypothesis and beyond the scope of this work, it is an exciting discovery.
+By observing a large negative loading value (-0.84) for the hallux size, we find that hawks with larger hallux have smaller culmen size, shorter wings, and lower weight.
+Could this indicate an evolutionary advantage for birds of this species?
+Could it be an adaptation strategy because the smaller bird is more agile and more effective in attacking?
+
+As PCA is an exploratory rather than inferential technique, these hypotheses should be treated with caution.
+However, there is no doubt that extracting such insights from this unintelligible amalgamation of information is highly exciting.
+The patterns identified in this analysis need to be confirmed with further studies.
+Other data analysis techniques, such as clustering analysis, could be applied to identify groups of hawks with similar characteristics or to study hunting behavior.
+In any case, the results open up new questions that should be confirmed with other types of inferential studies.
+
+At this point, we consider that there is "noise" in the dataset, variables that tend to confuse the model.
+We cannot consider these outliers, as we have mathematically shown - we believe.
+Before continuing with the analysis, an interesting option would be to use DBSCAN, as the groups are neither "spherical" nor have similar shapes, and it is clear that centroid-based methods like k-means present problems.
+
+Therefore, we will analyze the dataset using DBSCAN:
+
+```{r DBSCAN, echo=TRUE, message=FALSE, warning=FALSE}
+# Aplicando DBSCAN en terminos parecidos a la aplicación de OPTICS de partida, pero vamos probando hasta encontrar el mas optimo posible
+dbscan_result <- dbscan(hawks_z, eps= 0.5, minPts = 5)
+
+# Agregamos el resultado al DF principal. Aprovechamos para agregar OPTICS tambien e integrar resultados:
+
+# Agregamos a los datos el resultado de DBSCAN
+hawks_select$Dbscan_cluster <- as.factor(dbscan_result$cluster)
+
+# agregamos a los datos el resultado de OPTICS
+hawks_select$Optics_order <- as.factor(optics_result$order)
+
+# Graficamos los clusteres en un 'scatter plot' utilizando 'Wing' y 'Weight' 
+ggplot(hawks_select, aes(x = Wing, y= Weight, color = Dbscan_cluster)) +
+  theme_minimal() +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "Clusteres aplicando DBSCAN", x= "Alas", y = "Peso", color= "Cluster")
+
+```
+
+We observe more clearly that there are 3 distinguishable groups, where some observations have not been grouped according to the 'minPts' parameters.
+
+The fpc package provides us with the ability to obtain different statistics, such as the number of clusters, their sizes, radii, etc., which could be relevant at this stage of the analysis.
+We have different data that lend themselves to this, so we proceed to apply different cluster.stats.
+On one hand, we will apply it to the results of both k-means algorithms, and on the other hand, we will apply it to the results of OPTICS.
+
+```{r cluster.stats, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Aplicando 'cluster.stats' ##
+#################################
+# cluster.stats requiere de enteros, no de factores, por lo que lo convertimos:
+hawks_select$Cluster3i <- as.integer(as.character(hawks_select$Cluster3))
+hawks_select$Cluster6i <- as.integer(as.character(hawks_select$Cluster6))
+
+# Calculamos las distancias
+dist_matrix <- dist(hawks_select[, c("Wing", "Weight", "Culmen", "Hallux")])
+
+# Sacamos las estadísticas del cluster3
+clust3_stats <- cluster.stats(dist_matrix, hawks_select$Cluster3i)
+
+# Sacamos las estadísticas del cluster6
+clust6_stats <- cluster.stats(dist_matrix, hawks_select$Cluster6i)
+
+
+# Imprimimos las estadísticas del cluster3
+print(clust3_stats)
+
+# Imprimimos las estadísticas del cluster 6
+print(clust6_stats)
+
+```
+
+We can draw several conclusions from the results:
+
+1.  Clusters: The first clustering method produces 3 clusters, while the second one produces 6 clusters, as we specified in the k-means algorithm.
+    A higher number of clusters can result in a higher resolution of the data but may lead to over-segmentation, which seems to be the case here.
+
+2.  Minimum cluster size: The first method has a minimum cluster size of 72, while the second method has a minimum cluster size of 34.
+    The second method identifies smaller clusters in the data.
+    Mini-clusters can be both advantageous and disadvantageous, but in this context, it seems to be a disadvantage.
+
+3.  Cluster diameters: The second method identifies more compact clusters with a diameter of 1929.5, compared to 1293.6 in the first method.
+    This seems to favor the second method, i.e., 6 clusters.
+
+4.  Average silhouette: The average silhouette value for the first method is 0.71, which is better than the value of 0.52 for the second method.
+    This indicates that the first method assigns objects to clusters more effectively, making it better in this regard.
+
+5.  Dunn indices: The values are 0.004 and 0.002 for the first and second methods, respectively.
+    The Dunn index is used as a metric to evaluate the quality of clustering.
+    Values close to zero indicate poor clustering quality.
+    Both methods seem to poorly group the objects, but the first method performs slightly better.
+
+It appears that the first method produces clusters with a higher silhouette, while the second method identifies smaller and more compact groups.
+However, both methods offer subpar results overall.
+
+We will now proceed with our analysis by applying cluster.stats to the results of DBSCAN.
+Unlike OPTICS, DBSCAN groups points that are close in data space and within areas of density above a threshold.
+It may leave some points unassigned, as we observed in the previous graph.
+These unassigned groups are considered noise or outliers.
+
+Unlike OPTICS, however, DBSCAN directly provides a point-to-cluster assignment.
+This means that we can use cluster.stats with the results of DBSCAN to obtain various clustering metrics.
+However, as with OPTICS, some of the metrics provided by cluster.stats may be less relevant for a density-based clustering method like DBSCAN than for k-means.
+Nevertheless, it can be interesting to apply it and see the results.
+
+```{r cluster.stats sobre DBSCAN,  echo=TRUE, message=FALSE, warning=FALSE }
+
+## Convertimos el resultado de DBSCAN a factor
+clusters_dbscan <- dbscan_result$cluster
+#Eliminamos los puntos de ruido que son ceros
+no_noise_idx <- which(clusters_dbscan != 0)
+# Conviertimos el objeto "distancias" en una matriz completa
+distancias_matrix <- as.matrix(distancias)
+
+# Aplicamos la funcion cluster.stats
+dbscan_stats <- cluster.stats(distancias_matrix[no_noise_idx, no_noise_idx], clusters_dbscan[no_noise_idx])
+
+# Impresion de los resultados
+print(dbscan_stats)
+```
+
+The results obtained from the DBSCAN clustering using the cluster.stats function can be summarized as follows:
+
+-   Number of clusters: Three clusters were formed.
+
+\$cluster.number [1] 3
+
+-   Noise points were effectively removed according to the provided code.
+
+-   Cluster sizes: The cluster sizes range from 557.59 to 257 points, indicating significant variation in point density across different regions.
+
+-   Cluster diameters: The maximum distance between any pair of points within a cluster is 2.45, 1.66, and 1.30, respectively.
+    This suggests that the dispersion within clusters varies.
+
+-   Average and median distances: These values vary in line with what has been observed so far regarding the clusters.
+
+-   Separation between clusters: The minimum separation between clusters ranges from 1.03 to 2.61.
+    Clusters 2 and 3 are closer to each other compared to cluster 1, suggesting a possible similarity in the nature of the data grouped in these two clusters.
+
+-   Average silhouette width: The average silhouette width is relatively high at 0.73.
+    This indicates that most points are well grouped.
+    The silhouette width ranges from -1 to 1, with higher values indicating better assignment to clusters.
+
+-   Dunn index: A value of 0.24 is relatively low.
+    This indicates that the clusters are not well separated or compact, which is also observed in the graphs.
+
+-   Entropy: The entropy value of 0.83 can be considered high, suggesting a fairly uniform distribution among points.
+
+Next, we extract an ordered clustering performed by OPTICS using eps_cl = 0.065 to observe the results and see if they differ from the previously generated DBSCAN clustering.
+
+```{r extractDBSCAN, echo=TRUE, message=FALSE, warning=FALSE}
+
+## Extraccion de un clustering DBSCAN cortando la alcanzabilidad en el valor eps_cl
+optics_result2 <- extractDBSCAN(optics_result, eps_cl = .99)
+optics_result2
+```
+
+By manipulating the cutoff value for alkalinity, we obtain two groups with minimal noise.
+With other cutoff configurations, such as an eps_cl = .055, we obtain three groups with the following configuration, which seems more appropriate:
+
+0 1 2 3
+
+31 559 60 258
+
+We plotted the results.
+
+```{r plot Optics_result,  echo=TRUE, message=FALSE, warning=FALSE}
+# plot optics results
+plot(optics_result2)
+```
+
+Another visualisation:
+
+```{r hullplot, echo=FALSE, message=FALSE, warning=FALSE}
+## Visualizacion hull plot segun propuesta del equipo docente
+
+# Seleccionamos peso y alas
+v <- hawks_select[, c("Weight", "Wing")]
+
+# Seleccionamos pico y espolones
+w <- hawks_select[, c("Culmen", "Hallux")]
+
+
+# Visualizamos los clusters usando hullplot para v del segundo optics
+hullplot(v, optics_result2)
+# Visualizamos los clusters usando hullplot para w del segundo optics
+hullplot(w, optics_result2)
+```
+
+# Conclusions
+
+And at this point, we conclude the two examples.
+We could conclude that from the dataset, three heterogeneous clusters can be extracted, and the DBSCAN method with and without OPTICS appears to be superior to k-means for a dataset like the reference one, which has a lot of noise and data variability.
+However, in neither of the two cases can the results be considered satisfactory.
+
+## Comparison of Clustering Methods: K-means and DBSCAN
+
+Clustering is a widely used method in data analysis to identify patterns and underlying structures.
+Two of the most popular clustering algorithms are K-means and DBSCAN.
+Each has its own strengths and weaknesses:
+
+## K-means
+
+The K-means algorithm is an unsupervised prototype-based clustering method that aims to minimize the total variance within a group.
+It is simple and effective and has been a reference tool for decades, but with limitations.
+A predefined number of centroids are randomly selected, and data points are assigned to the nearest centroid or group with the closest mean.
+Then, the centroids are recalculated, and the process is repeated until a convergence criterion is met.
+This method has limitations.
+
+It requires the prior specification of the number of clusters, which may be unknown in real-world situations.
+
+Additionally, K-means tends to generate circular clusters and may not work well with clusters of more complex shapes or with noise, as we have seen in our dataset.
+
+## DBSCAN
+
+DBSCAN (Density-Based Spatial Clustering of Applications with Noise) is a density-based clustering algorithm.
+It groups points together that have a sufficiently high number of points in their neighborhood and can discover clusters of non-linear shapes.
+DBSCAN does not require the prior specification of the number of clusters.
+On the downside, it is sensitive to the selection of input parameters, such as the maximum distance (eps) and the minimum number of points required to form a dense cluster (minPts).
+It can be challenging to interpret its results, especially in cases where clusters are close and exhibit density variations.
+This requires experience and time to fine-tune or refine the model.
+Additionally, DBSCAN's dependency on the Euclidean distance measure can be a disadvantage in high-dimensional datasets, where the curse of dimensionality can distort distances between points.
+
+We have also explored the OPTICS algorithm, which can be considered an extension of DBSCAN.
+It addresses the limitations of DBSCAN in terms of identifying clusters with variable density.
+With OPTICS, it is possible to graphically represent the clustering results and extract clusters from a hierarchy of densities, which is useful in contexts where clustering patterns are not initially evident.
+
+## Comparison of Results
+
+In our analysis, we applied both methods (or multiple methods) to a dataset of birds of prey and compared the results.
+Each of these algorithms has provided valuable insights.
+
+We observed that K-means generated relatively uniform clusters with moderate variation in cluster sizes and good separation between them.
+However, the clustering produced by DBSCAN showed greater variation in cluster sizes and higher density within the clusters.
+Additionally, DBSCAN was able to identify clusters with more complex shapes than K-means and handled noise and outliers better.
+OPTICS provided an intuitive visual representation of the data's structure and density, allowing us to better understand the interrelationships between the identified groups.
+
+Regarding clustering validation, we used various metrics.
+The average silhouette width, which measures the cohesion and separation of clusters, was high for both techniques, indicating a good assignment of points to clusters.
+However, the Dunn index, which is based on the relationship between the internal compactness of clusters and the separation between them, was lower for DBSCAN, suggesting that the clusters might not be well-separated or compact.
+
+Both methods can be useful tools for data clustering, but their performance may vary depending on the characteristics of the dataset, especially with real-world data that exhibit high variance and high levels of noise, as in the case developed in this work.
+The choice between different techniques is part of the data scientist's work.
+The selection of the clustering algorithm should be guided by the nature of the dataset and the research questions, so it is vital to understand the strengths and weaknesses of each technique or method.
+
+# BIBLIOGRAPHY
