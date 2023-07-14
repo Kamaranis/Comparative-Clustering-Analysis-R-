@@ -3,6 +3,9 @@ title: "Unsupervised methods in machine learning"
 author: "Anton Barrera Mora (me@antonio-barrera.cyou)"
 date: "March 2023"
 output:
+  github_document:
+    preserve_yaml: true
+  word_document: default
   html_document:
     highlight: default
     number_sections: yes
@@ -11,9 +14,6 @@ output:
     toc_depth: 3
     includes:
       in_header: p_brand.html
-  word_document: default
-  github_document:
-    preserve_yaml: true
   pdf_document:
     highlight: zenburn
     toc: yes
